@@ -781,7 +781,7 @@ $("form").addEventListener("submit",function(e){
  var os=document.querySelector('input[name="os"]:checked').value;
  var r={id:S.seq++,ts:Date.now(),phone:fmtPhone(d),os:os,sid:sv.id,ch:sel.ch,mkt:$("ag-mkt").checked,coupon:makeCoupon(),chg:false};
  S.regs.unshift(r);save();
- track("generate_lead",{form_id:FORM_ID,platform:os,server_name:sv.name,channel_name:(r.ch+1)+"채널",marketing_opt_in:r.mkt});
+ track("generate_lead",{form_id:FORM_ID,platform:os,server_name:sv.name,channel_name:(r.ch+1)+"채널",marketing_opt_in:r.mkt,top_button_clicked:readCta().top,last_cta_location:readCta().last});
  $("form").hidden=true;$("done").hidden=false;
  $("done-msg").textContent=sv.name+" 서버 "+(r.ch+1)+"채널 · "+os+" 사전예약이 접수되었습니다. 출시 당일(2026.12.17) 문자로 쿠폰을 보내드립니다.";
  $("coupon").textContent=r.coupon;
@@ -797,10 +797,17 @@ $("again").addEventListener("click",function(){
 /* ---------- GA4 이벤트 측정 (사전예약 폼 · CTA) ----------
    generate_lead / form_submit_attempt / form_error 는 위 submit 핸들러 안에서 전송합니다.
    여기서는 클릭·선택·입력 이벤트를 전송합니다. (위의 change 핸들러가 먼저 실행되므로 sel, 체크 상태는 이미 최신입니다.) */
-// 1) cta_click: 사전예약 앵커(#reserve) 클릭 — 히어로 버튼 / 하단 고정 바 구분
+// 1) cta_click: 사전예약 앵커(#reserve) 클릭 — 상단 버튼(top_button) / 모바일 하단 고정 바(mobile_bottom_bar) 구분
+//    클릭 이력을 세션(탭) 단위로 기억해 두었다가 generate_lead 에 실어 보냅니다.
+//    → "사전예약 완료자 중 상단 버튼(top_button)을 누르고 완료한 비율" 계산용
+var CTA_KEY="lantern-cta-v2";
+function readCta(){try{var o=JSON.parse(sget(CTA_KEY,true)||"{}");return{top:!!o.top,last:o.last||"none"}}catch(e){return{top:false,last:"none"}}}
+function saveCta(loc){var c=readCta();if(loc==="top_button")c.top=true;c.last=loc;sset(CTA_KEY,JSON.stringify(c),true)}
 document.addEventListener("click",function(e){
  var a=e.target.closest&&e.target.closest('a[href="#reserve"]');if(!a)return;
- track("cta_click",{cta_location:a.closest(".hero")?"hero":a.closest("#sticky")?"sticky":"other"});
+ var loc=a.closest(".hero")?"top_button":a.closest("#sticky")?"mobile_bottom_bar":"other";
+ saveCta(loc);
+ track("cta_click",{cta_location:loc});
 });
 // 2) form_start: 휴대폰 번호 첫 포커스(폼 초기화 후 다시 시작하면 다시 1회)
 var formStarted=false;
