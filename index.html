@@ -633,6 +633,9 @@ function fmtPhone(v){var d=v.replace(/\D/g,"").slice(0,11);if(d.length<4)return 
 function digits(p){return p.replace(/\D/g,"")}
 function maskPhone(p){return p.replace(/^(\d{3})-(\d{4})-(\d{4})$/,"$1-****-$3")}
 function makeCoupon(){var c="ABCDEFGHJKLMNPQRSTUVWXYZ23456789",s="";for(var i=0;i<8;i++)s+=c.charAt(Math.floor(Math.random()*c.length));return "LNTN-"+s.slice(0,4)+"-"+s.slice(4)}
+// GA4 이벤트 전송 도구: 파라미터에 휴대폰 번호 등 개인정보를 절대 넣지 않습니다. 측정 오류가 화면 동작에 영향을 주지 않도록 try/catch로 감쌉니다.
+function track(name,params){try{if(typeof window.gtag==="function")window.gtag("event",name,params||{})}catch(e){}}
+var FORM_ID="reservation_form";
 // 화면 하단에 알림 메시지를 잠깐 띄움
 var tt;function toast(m){var t=$("toast");t.setAttribute("role","status");t.textContent=m;t.hidden=false;clearTimeout(tt);tt=setTimeout(function(){t.hidden=true},2800)}
 
@@ -768,14 +771,17 @@ $("phone").addEventListener("input",function(){var v=fmtPhone(this.value);if(thi
 // 사전예약 제출: 번호 형식(010 + 8자리) 검사 → 중복 번호 검사 → 채널 정원 재확인 → 저장 → 완료 화면 표시
 $("form").addEventListener("submit",function(e){
  e.preventDefault();
+ track("form_submit_attempt",{form_id:FORM_ID});
+ if(![].every.call(document.querySelectorAll(".req-ag"),function(a){return a.checked})){track("form_error",{form_id:FORM_ID,error_type:"consent_required"});toast("필수 항목에 모두 동의해 주세요.");return}
  var d=digits($("phone").value);
- if(!/^010\d{8}$/.test(d)){phoneErr("010으로 시작하는 휴대폰 번호 11자리를 입력해 주세요.");return}
- if(S.regs.some(function(r){return digits(r.phone)===d})){phoneErr("이미 사전예약한 번호입니다.");return}
+ if(!/^010\d{8}$/.test(d)){track("form_error",{form_id:FORM_ID,error_type:"invalid_phone"});phoneErr("010으로 시작하는 휴대폰 번호 11자리를 입력해 주세요.");return}
+ if(S.regs.some(function(r){return digits(r.phone)===d})){track("form_error",{form_id:FORM_ID,error_type:"duplicate_phone"});phoneErr("이미 사전예약한 번호입니다.");return}
  var sv=srv(sel.sid);
- if(sel.ch<0||used(sv,sel.ch)>=sv.chs[sel.ch].cap){toast("선택한 채널이 마감되었습니다. 다른 채널을 선택해 주세요.");renderChannels();return}
+ if(sel.ch<0||used(sv,sel.ch)>=sv.chs[sel.ch].cap){track("form_error",{form_id:FORM_ID,error_type:"channel_full"});toast("선택한 채널이 마감되었습니다. 다른 채널을 선택해 주세요.");renderChannels();return}
  var os=document.querySelector('input[name="os"]:checked').value;
  var r={id:S.seq++,ts:Date.now(),phone:fmtPhone(d),os:os,sid:sv.id,ch:sel.ch,mkt:$("ag-mkt").checked,coupon:makeCoupon(),chg:false};
  S.regs.unshift(r);save();
+ track("generate_lead",{form_id:FORM_ID,platform:os,server_name:sv.name,channel_name:(r.ch+1)+"채널",marketing_opt_in:r.mkt});
  $("form").hidden=true;$("done").hidden=false;
  $("done-msg").textContent=sv.name+" 서버 "+(r.ch+1)+"채널 · "+os+" 사전예약이 접수되었습니다. 출시 당일(2026.12.17) 문자로 쿠폰을 보내드립니다.";
  $("coupon").textContent=r.coupon;
@@ -787,6 +793,37 @@ $("again").addEventListener("click",function(){
  $("phone").value="";phoneOk();ags.forEach(function(a){a.checked=false});$("ag-all").checked=false;
  $("done").hidden=true;$("form").hidden=false;renderChannels();$("phone").focus();
 });
+
+/* ---------- GA4 이벤트 측정 (사전예약 폼 · CTA) ----------
+   generate_lead / form_submit_attempt / form_error 는 위 submit 핸들러 안에서 전송합니다.
+   여기서는 클릭·선택·입력 이벤트를 전송합니다. (위의 change 핸들러가 먼저 실행되므로 sel, 체크 상태는 이미 최신입니다.) */
+// 1) cta_click: 사전예약 앵커(#reserve) 클릭 — 히어로 버튼 / 하단 고정 바 구분
+document.addEventListener("click",function(e){
+ var a=e.target.closest&&e.target.closest('a[href="#reserve"]');if(!a)return;
+ track("cta_click",{cta_location:a.closest(".hero")?"hero":a.closest("#sticky")?"sticky":"other"});
+});
+// 2) form_start: 휴대폰 번호 첫 포커스(폼 초기화 후 다시 시작하면 다시 1회)
+var formStarted=false;
+$("phone").addEventListener("focus",function(){if(formStarted)return;formStarted=true;track("form_start",{form_id:FORM_ID})});
+$("again").addEventListener("click",function(){formStarted=false});
+// 3) select_platform: 라디오 change (라벨 클릭·키보드 모두 포함). Android는 기본 선택이라 사용자가 바꿀 때만 전송됩니다.
+var lastOs=document.querySelector('input[name="os"]:checked').value;
+document.querySelector('input[name="os"]').closest("fieldset").addEventListener("change",function(e){
+ if(e.target.name!=="os")return;
+ track("select_platform",{platform:e.target.value,previous_platform:lastOs});lastOs=e.target.value;
+});
+// 4) select_server
+$("servers").addEventListener("change",function(e){
+ if(e.target.name!=="srv")return;var sv=srv(e.target.value);
+ track("select_server",{server_name:sv.name,server_status:TAGS[sv.tag]});
+});
+// 5) select_channel: 남은 자리(remaining_slots) 포함
+$("channels").addEventListener("change",function(e){
+ if(e.target.name!=="ch")return;var sv=srv(sel.sid),i=+e.target.value;
+ track("select_channel",{server_name:sv.name,channel_name:(i+1)+"채널",remaining_slots:Math.max(0,sv.chs[i].cap-used(sv,i))});
+});
+// 6) consent_all_click: 전체 동의 클릭 시점의 선택(마케팅) 동의 여부
+$("ag-all").addEventListener("change",function(){track("consent_all_click",{optional_marketing_agreed:$("ag-mkt").checked})});
 
 /* ---------- admin ---------- */
 // 관리자 화면 상태: 정원 수정 모드, 현재 쪽, 검색어, 행 수정·삭제 확인 상태 등
@@ -1098,140 +1135,5 @@ route();
 })();
 
 </script>
-      <!-- ============================================================
-         GA4 이벤트 측정 스크립트 (등불항로 사전예약)
-         - 기존 페이지 스크립트는 수정하지 않고, 화면(DOM) 변화를 감지해 이벤트를 보냅니다.
-         - 주소에 ?ga_debug=1 을 붙이면 콘솔에 로그가 찍히고 GA4 DebugView에도 표시됩니다.
-         - 개인정보 보호: 휴대폰 번호 등 개인 식별 정보는 어떤 파라미터에도 보내지 않습니다.
-         ============================================================ -->
-    <script>
-(function(){
-"use strict";
-var FORM_ID="reservation_form";
-var DEBUG=/[?&]ga_debug=1/.test(location.search);
-
-// 공통 전송 함수: gtag가 없어도 오류 없이 넘어갑니다.
-function track(name,params){
-  params=params||{};
-  if(DEBUG)params.debug_mode=true;
-  try{
-    if(typeof window.gtag==="function")window.gtag("event",name,params);
-  }catch(e){}
-  if(DEBUG)console.log("[GA4]",name,params);
-}
-function $(id){return document.getElementById(id)}
-function txt(el){return el?el.textContent.replace(/\s+/g," ").trim():""}
-
-/* ---------- 현재 폼 선택값 읽기 ---------- */
-function getPlatform(){var r=document.querySelector('input[name="os"]:checked');return r?r.value:""}
-function labelOf(input){return input?document.querySelector('label[for="'+input.id+'"]'):null}
-function getServer(){
-  var r=document.querySelector('input[name="srv"]:checked'),l=labelOf(r);
-  return {name:txt(l&&l.querySelector("b")),status:txt(l&&l.querySelector(".pill"))};
-}
-function getChannel(){
-  var r=document.querySelector('input[name="ch"]:checked'),l=labelOf(r);
-  if(!l)return {name:"",slots:null};
-  var small=txt(l.querySelector("small")),m=small.replace(/,/g,"").match(/(\d+)\s*자리/);
-  return {name:txt(l).replace(small,"").trim(),slots:m?+m[1]:0};
-}
-
-/* ---------- 1. cta_click : 사전예약 이동 버튼 클릭 ---------- */
-document.addEventListener("click",function(e){
-  var a=e.target.closest&&e.target.closest('a.btn[href="#reserve"]');
-  if(!a)return;
-  var loc=a.closest("#sticky")?"sticky":a.closest("header.hero")?"hero":"other";
-  track("cta_click",{cta_location:loc,cta_text:txt(a).replace(/\s*→$/,"")});
-});
-
-/* ---------- 2. form_start : 휴대폰 번호 첫 포커스 (폼당 1회) ---------- */
-var started=false;
-// "다른 번호로 다시 해 보기" 클릭 시(캡처 단계) 먼저 초기화 → 다시 입력하면 form_start가 새로 측정됩니다.
-document.addEventListener("click",function(e){
-  if(e.target.closest&&e.target.closest("#again"))started=false;
-},true);
-document.addEventListener("focusin",function(e){
-  if(started||e.target.id!=="phone")return;
-  started=true;
-  track("form_start",{form_id:FORM_ID});
-});
-
-/* ---------- 3. select_platform : Android / iOS 변경 ---------- */
-var lastPlatform=getPlatform()||"Android";   // 기본 선택값(Android)을 기준으로 변경 여부 판단
-document.addEventListener("change",function(e){
-  var t=e.target;if(!t||t.name!=="os")return;
-  track("select_platform",{platform:t.value,previous_platform:lastPlatform,is_default:false});
-  lastPlatform=t.value;
-});
-
-/* ---------- 4. select_server : 서버 선택 ---------- */
-document.addEventListener("change",function(e){
-  var t=e.target;if(!t||t.name!=="srv")return;
-  var s=getServer();
-  track("select_server",{server_name:s.name,server_status:s.status});
-});
-
-/* ---------- 5. select_channel : 채널 선택 ---------- */
-document.addEventListener("change",function(e){
-  var t=e.target;if(!t||t.name!=="ch")return;
-  var s=getServer(),c=getChannel();
-  track("select_channel",{server_name:s.name,channel_name:c.name,remaining_slots:c.slots});
-});
-
-/* ---------- 6. consent_all_click : 전체 동의 클릭 ---------- */
-document.addEventListener("change",function(e){
-  if(!e.target||e.target.id!=="ag-all")return;
-  track("consent_all_click",{optional_marketing_agreed:!!$("ag-mkt").checked,form_id:FORM_ID});
-});
-
-/* ---------- 7. form_submit_attempt : 제출 시도 (Enter 키 제출 포함) ----------
-   캡처 단계에서 먼저 실행되므로, 기존 제출 처리보다 앞서 선택값을 저장해 둡니다. */
-var snap=null;
-document.addEventListener("submit",function(e){
-  if(!e.target||e.target.id!=="form")return;
-  snap={platform:getPlatform(),server:getServer().name,channel:getChannel().name,mkt:!!$("ag-mkt").checked};
-  track("form_submit_attempt",{form_id:FORM_ID});
-},true);
-
-/* ---------- 8. form_error : 유효성 검사 실패 ---------- */
-// (a) 번호 형식 오류 / 중복 번호 — 번호 입력칸 안내 문구가 오류 상태로 바뀔 때
-var hint=$("phone-hint");
-if(hint){
-  new MutationObserver(function(){
-    if(!/(^|\s)err(\s|$)/.test(hint.className))return;
-    var m=txt(hint),type=/이미 사전예약/.test(m)?"duplicate_phone":"invalid_phone";
-    track("form_error",{form_id:FORM_ID,error_type:type});
-  }).observe(hint,{attributes:true,attributeFilter:["class"],childList:true,characterData:true,subtree:true});
-}
-// (b) 채널 마감 — 제출 순간 채널이 마감되었다는 알림이 뜰 때
-var toastEl=$("toast");
-if(toastEl){
-  new MutationObserver(function(){
-    if(toastEl.hidden||!/마감/.test(txt(toastEl)))return;
-    track("form_error",{form_id:FORM_ID,error_type:"channel_full"});
-  }).observe(toastEl,{attributes:true,attributeFilter:["hidden"],childList:true,characterData:true,subtree:true});
-}
-// ※ "필수 미동의"는 필수 항목을 체크하기 전까지 제출 버튼이 비활성화되어 제출 자체가 불가능하므로,
-//    form_error로는 발생하지 않습니다. (제출 버튼 비활성 상태 클릭 추적은 별도 요청 시 추가)
-
-/* ---------- 9. generate_lead : 사전예약 성공 (전환 이벤트) ----------
-   완료 화면(#done)이 나타나는 순간을 성공으로 간주합니다. */
-var done=$("done");
-if(done){
-  new MutationObserver(function(){
-    if(done.hidden)return;
-    var s=snap||{platform:getPlatform(),server:getServer().name,channel:getChannel().name,mkt:!!$("ag-mkt").checked};
-    track("generate_lead",{
-      form_id:FORM_ID,
-      platform:s.platform,
-      server_name:s.server,
-      channel_name:s.channel,
-      marketing_opt_in:s.mkt
-    });
-    snap=null;
-  }).observe(done,{attributes:true,attributeFilter:["hidden"]});
-}
-})();
-    </script>
   </body>
 </html>
